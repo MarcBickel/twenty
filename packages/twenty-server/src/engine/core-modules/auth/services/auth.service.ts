@@ -62,6 +62,10 @@ import { EmailService } from 'src/engine/core-modules/email/email.service';
 import { FeatureFlagService } from 'src/engine/core-modules/feature-flag/services/feature-flag.service';
 import { GuardRedirectService } from 'src/engine/core-modules/guard-redirect/services/guard-redirect.service';
 import { I18nService } from 'src/engine/core-modules/i18n/i18n.service';
+import {
+  SSOIdentityProviderStatus,
+  WorkspaceSSOIdentityProviderEntity,
+} from 'src/engine/core-modules/sso/workspace-sso-identity-provider.entity';
 import { TwentyConfigService } from 'src/engine/core-modules/twenty-config/twenty-config.service';
 import { UserWorkspaceService } from 'src/engine/core-modules/user-workspace/user-workspace.service';
 import { UserService } from 'src/engine/core-modules/user/services/user.service';
@@ -103,6 +107,8 @@ export class AuthService {
     private readonly applicationRegistrationService: ApplicationRegistrationService,
     private readonly featureFlagService: FeatureFlagService,
     private readonly createSSOConnectedAccountService: CreateSSOConnectedAccountService,
+    @InjectRepository(WorkspaceSSOIdentityProviderEntity)
+    private readonly workspaceSSOIdentityProviderRepository: Repository<WorkspaceSSOIdentityProviderEntity>,
   ) {}
 
   private async checkAccessAndUseInvitationOrThrow(
@@ -262,31 +268,55 @@ export class AuthService {
       await this.validatePassword(userData, authParams);
     }
 
-    if (isDefined(workspace)) {
-      const isProviderEnabled = workspaceValidator.isAuthEnabled(
-        authParams.provider,
-        workspace,
+    if (!isDefined(workspace)) {
+      return;
+    }
+
+    if (authParams.provider === AuthProviderEnum.SSO) {
+      await this.validateWorkspaceHasActiveSSOIdentityProviderOrThrow(
+        workspace.id,
       );
 
-      if (isProviderEnabled) {
-        return;
-      }
+      return;
+    }
 
-      const existingUser =
-        userData.type === 'existingUser' ? userData.existingUser : undefined;
+    if (workspaceValidator.isAuthEnabled(authParams.provider, workspace)) {
+      return;
+    }
 
-      if (
-        existingUser &&
-        (await this.canUserBypassAuthProvider({
-          user: existingUser,
-          workspace,
-          provider: authParams.provider,
-        }))
-      ) {
-        return;
-      }
+    const existingUser =
+      userData.type === 'existingUser' ? userData.existingUser : undefined;
 
-      workspaceValidator.isAuthEnabledOrThrow(authParams.provider, workspace);
+    if (
+      existingUser &&
+      (await this.canUserBypassAuthProvider({
+        user: existingUser,
+        workspace,
+        provider: authParams.provider,
+      }))
+    ) {
+      return;
+    }
+
+    workspaceValidator.isAuthEnabledOrThrow(authParams.provider, workspace);
+  }
+
+  private async validateWorkspaceHasActiveSSOIdentityProviderOrThrow(
+    workspaceId: string,
+  ) {
+    const workspaceHasActiveSSOIdentityProvider =
+      await this.workspaceSSOIdentityProviderRepository.exists({
+        where: {
+          workspaceId,
+          status: SSOIdentityProviderStatus.Active,
+        },
+      });
+
+    if (!workspaceHasActiveSSOIdentityProvider) {
+      throw new AuthException(
+        'SSO auth is not enabled for this workspace',
+        AuthExceptionCode.OAUTH_ACCESS_DENIED,
+      );
     }
   }
 

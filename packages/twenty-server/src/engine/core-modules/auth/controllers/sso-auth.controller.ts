@@ -167,6 +167,13 @@ export class SSOAuthController {
         ),
       );
 
+      if (currentWorkspace.id !== workspaceIdentityProvider.workspaceId) {
+        throw new AuthException(
+          'Identity provider does not belong to this workspace',
+          AuthExceptionCode.OAUTH_ACCESS_DENIED,
+        );
+      }
+
       const oidcTokenClaims =
         'oidcTokenClaims' in req.user ? req.user.oidcTokenClaims : undefined;
 

@@ -32,6 +32,10 @@ import { WorkspaceEntity } from 'src/engine/core-modules/workspace/workspace.ent
 import { ApplicationRegistrationService } from 'src/engine/core-modules/application/application-registration/application-registration.service';
 import { CreateSSOConnectedAccountService } from 'src/engine/core-modules/auth/services/create-sso-connected-account.service';
 import { FeatureFlagService } from 'src/engine/core-modules/feature-flag/services/feature-flag.service';
+import {
+  SSOIdentityProviderStatus,
+  WorkspaceSSOIdentityProviderEntity,
+} from 'src/engine/core-modules/sso/workspace-sso-identity-provider.entity';
 import { PermissionsService } from 'src/engine/metadata-modules/permissions/permissions.service';
 
 import { AuthService } from './auth.service';
@@ -52,6 +56,8 @@ describe('AuthService', () => {
   let signInUpServiceMock: jest.Mocked<
     Pick<SignInUpService, 'validatePassword'>
   >;
+  let signInUpService: SignInUpService;
+  let workspaceSSOIdentityProviderRepository: Repository<WorkspaceSSOIdentityProviderEntity>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -105,6 +111,7 @@ describe('AuthService', () => {
           useValue: {
             validatePassword: jest.fn().mockResolvedValue(undefined),
             generateHash: jest.fn(),
+            signInUp: jest.fn(),
           },
         },
         {
@@ -190,6 +197,12 @@ describe('AuthService', () => {
               .mockResolvedValue(undefined),
           },
         },
+        {
+          provide: getRepositoryToken(WorkspaceSSOIdentityProviderEntity),
+          useValue: {
+            exists: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -211,6 +224,10 @@ describe('AuthService', () => {
     signInUpServiceMock = module.get(SignInUpService) as jest.Mocked<
       Pick<SignInUpService, 'validatePassword'>
     >;
+    signInUpService = module.get<SignInUpService>(SignInUpService);
+    workspaceSSOIdentityProviderRepository = module.get<
+      Repository<WorkspaceSSOIdentityProviderEntity>
+    >(getRepositoryToken(WorkspaceSSOIdentityProviderEntity));
   });
 
   beforeEach(() => {
@@ -674,6 +691,51 @@ describe('AuthService', () => {
       expect(result).toBeDefined();
       expect(spyWorkspaceRepository).toHaveBeenCalledTimes(0);
       expect(spyAuthSsoService).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('signInUp - SSO provider enablement', () => {
+    const ssoSignInUpParams = {
+      userData: {
+        type: 'existingUser',
+        existingUser: { id: 'user-id', email: 'user@example.com' },
+      },
+      workspace: { id: 'workspace-id' },
+      authParams: { provider: AuthProviderEnum.SSO },
+    } as unknown as Parameters<AuthService['signInUp']>[0];
+
+    it('throws when the workspace does not own an active SSO identity provider', async () => {
+      jest
+        .spyOn(workspaceSSOIdentityProviderRepository, 'exists')
+        .mockResolvedValue(false);
+      const signInUpSpy = jest.spyOn(signInUpService, 'signInUp');
+
+      await expect(service.signInUp(ssoSignInUpParams)).rejects.toThrow(
+        new AuthException(
+          'SSO auth is not enabled for this workspace',
+          AuthExceptionCode.OAUTH_ACCESS_DENIED,
+        ),
+      );
+      expect(signInUpSpy).not.toHaveBeenCalled();
+    });
+
+    it('allows sign-in when the workspace owns an active SSO identity provider', async () => {
+      const existsSpy = jest
+        .spyOn(workspaceSSOIdentityProviderRepository, 'exists')
+        .mockResolvedValue(true);
+      const signInUpSpy = jest
+        .spyOn(signInUpService, 'signInUp')
+        .mockResolvedValue({} as any);
+
+      await service.signInUp(ssoSignInUpParams);
+
+      expect(existsSpy).toHaveBeenCalledWith({
+        where: {
+          workspaceId: 'workspace-id',
+          status: SSOIdentityProviderStatus.Active,
+        },
+      });
+      expect(signInUpSpy).toHaveBeenCalledTimes(1);
     });
   });
 });
