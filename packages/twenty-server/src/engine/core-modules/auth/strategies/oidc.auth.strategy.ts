@@ -94,6 +94,15 @@ export class OIDCAuthStrategy extends PassportStrategy(
 
       const userinfo = await this.client.userinfo(tokenset);
 
+      if (userinfo.email_verified === false) {
+        return done(
+          new AuthException(
+            'Email not verified by identity provider',
+            AuthExceptionCode.INVALID_DATA,
+          ),
+        );
+      }
+
       const email = userinfo.email ?? userinfo.upn;
 
       if (!email || typeof email !== 'string') {
